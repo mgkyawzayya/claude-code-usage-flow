@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./vendor/bin/pint:*)",
+      "Bash(composer test:*)",
+      "WebFetch(domain:github.com)",
+      "Bash(mkdir:*)",
+      "Bash(npm run types:*)",
+      "Bash(npm run lint)",
+      "Bash(grep:*)",
+      "Bash(php artisan:*)",
+      "Bash(sqlite3:*)",
+      "Bash(npm install:*)",
+      "Bash(find:*)",
+      "Bash(npm run lint:*)"
+    ]
+  }
+}
