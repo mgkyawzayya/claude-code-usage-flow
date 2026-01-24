@@ -8,6 +8,7 @@ use App\Models\Product;
 use App\Models\Sale;
 use App\Models\SaleItem;
 use App\Models\StockMovement;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
@@ -18,9 +19,8 @@ class SaleController extends Controller
     public function index(Request $request): Response
     {
         $query = Sale::with('saleItems')
-            ->where('user_id', auth()->id());
+            ->forUser(auth()->id());
 
-        // Filter by date
         if ($request->filled('date_from')) {
             $query->whereDate('created_at', '>=', $request->date_from);
         }
@@ -29,17 +29,14 @@ class SaleController extends Controller
             $query->whereDate('created_at', '<=', $request->date_to);
         }
 
-        // Filter by status
         if ($request->filled('status')) {
             $query->where('status', $request->status);
         }
 
-        // Filter by payment method
         if ($request->filled('payment_method')) {
             $query->where('payment_method', $request->payment_method);
         }
 
-        // Search by invoice number or customer name
         if ($request->filled('search')) {
             $search = $request->search;
             $query->where(function ($q) use ($search) {
@@ -53,6 +50,7 @@ class SaleController extends Controller
 
         return Inertia::render('pos/sales/index', [
             'sales' => $sales,
+            'statuses' => Sale::STATUSES,
             'filters' => $request->only(['date_from', 'date_to', 'status', 'payment_method', 'search']),
         ]);
     }
@@ -64,14 +62,12 @@ class SaleController extends Controller
 
     public function createPos(): Response
     {
-        // Load active products for POS interface
-        $products = Product::where('user_id', auth()->id())
+        $products = Product::forUser(auth()->id())
             ->active()
             ->with('category')
             ->orderBy('name')
             ->get();
 
-        // Load categories for filtering
         $categories = Category::where('user_id', auth()->id())
             ->active()
             ->orderBy('name')
@@ -83,13 +79,12 @@ class SaleController extends Controller
         ]);
     }
 
-    public function store(StoreSaleRequest $request)
+    public function store(StoreSaleRequest $request): RedirectResponse
     {
         $validated = $request->validated();
 
         try {
             $sale = DB::transaction(function () use ($validated) {
-                // Calculate totals
                 $subtotal = 0;
                 foreach ($validated['items'] as $item) {
                     $subtotal += ($item['unit_price'] * $item['quantity']) - ($item['discount'] ?? 0);
@@ -99,11 +94,10 @@ class SaleController extends Controller
                 $discount = $validated['discount'] ?? 0;
                 $total = $subtotal + $tax - $discount;
 
-                // Create sale
                 $sale = Sale::create([
                     'user_id' => auth()->id(),
-                    'invoice_number' => $validated['invoice_number'] ?? Sale::generateInvoiceNumber(),
-                    'status' => $validated['status'] ?? 'completed',
+                    'invoice_number' => $validated['invoice_number'] ?? null,
+                    'status' => $validated['status'] ?? Sale::STATUS_COMPLETED,
                     'subtotal' => $subtotal,
                     'tax' => $tax,
                     'discount' => $discount,
@@ -118,22 +112,17 @@ class SaleController extends Controller
                     'completed_at' => now(),
                 ]);
 
-                // Process each item
                 foreach ($validated['items'] as $item) {
-                    // Lock product for update to prevent race conditions
                     $product = Product::lockForUpdate()->findOrFail($item['product_id']);
 
-                    // Validate stock if tracking inventory
                     if ($product->track_inventory && $product->stock_quantity < $item['quantity']) {
                         throw new \Exception("Insufficient stock for {$product->name}. Available: {$product->stock_quantity}, Requested: {$item['quantity']}");
                     }
 
-                    // Calculate item totals
                     $itemSubtotal = $item['unit_price'] * $item['quantity'];
                     $itemDiscount = $item['discount'] ?? 0;
                     $itemTotal = $itemSubtotal - $itemDiscount;
 
-                    // Create sale item
                     SaleItem::create([
                         'sale_id' => $sale->id,
                         'product_id' => $product->id,
@@ -146,7 +135,6 @@ class SaleController extends Controller
                         'total' => $itemTotal,
                     ]);
 
-                    // Update stock and create movement if tracking inventory
                     if ($product->track_inventory) {
                         $quantityBefore = $product->stock_quantity;
                         $product->decrement('stock_quantity', $item['quantity']);
@@ -180,26 +168,18 @@ class SaleController extends Controller
 
     public function show(Sale $sale): Response
     {
-        if ($sale->user_id !== auth()->id()) {
-            abort(403);
-        }
-
-        $sale->load(['items.product.category']);
+        // Authorization handled by resolveRouteBinding in Sale model
+        $sale->load(['saleItems.product.category']);
 
         return Inertia::render('pos/sales/show', [
             'sale' => $sale,
         ]);
     }
 
-    public function destroy(Sale $sale)
+    public function destroy(Sale $sale): RedirectResponse
     {
-        if ($sale->user_id !== auth()->id()) {
-            abort(403);
-        }
-
         try {
             DB::transaction(function () use ($sale) {
-                // Restore stock for each item
                 foreach ($sale->saleItems as $item) {
                     $product = Product::lockForUpdate()->find($item->product_id);
 
@@ -208,7 +188,6 @@ class SaleController extends Controller
                         $product->increment('stock_quantity', $item->quantity);
                         $quantityAfter = $quantityBefore + $item->quantity;
 
-                        // Create adjustment stock movement
                         StockMovement::create([
                             'user_id' => auth()->id(),
                             'product_id' => $product->id,
@@ -223,7 +202,6 @@ class SaleController extends Controller
                     }
                 }
 
-                // Soft delete the sale
                 $sale->delete();
             });
 

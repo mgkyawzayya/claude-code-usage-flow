@@ -7,10 +7,21 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Facades\DB;
 
 class Sale extends Model
 {
     use HasFactory, SoftDeletes;
+
+    public const STATUS_PENDING = 'pending';
+    public const STATUS_COMPLETED = 'completed';
+    public const STATUS_CANCELLED = 'cancelled';
+
+    public const STATUSES = [
+        self::STATUS_PENDING => 'Pending',
+        self::STATUS_COMPLETED => 'Completed',
+        self::STATUS_CANCELLED => 'Cancelled',
+    ];
 
     protected $fillable = [
         'user_id',
@@ -53,27 +64,39 @@ class Sale extends Model
         return $this->hasMany(SaleItem::class);
     }
 
-    public function items(): HasMany
-    {
-        return $this->saleItems();
-    }
-
     public function scopeCompleted($query)
     {
-        return $query->where('status', 'completed');
+        return $query->where('status', self::STATUS_COMPLETED);
     }
 
-    public static function generateInvoiceNumber(): string
+    public function scopeForUser($query, int $userId)
     {
-        $prefix = 'INV';
-        $date = now()->format('Ymd');
-        $lastSale = static::whereDate('created_at', today())
-            ->latest('id')
-            ->first();
+        return $query->where('user_id', $userId);
+    }
 
-        $sequence = $lastSale ? ((int) substr($lastSale->invoice_number, -4)) + 1 : 1;
+    /**
+     * Generate a unique invoice number using database-level locking to prevent race conditions.
+     */
+    public static function generateInvoiceNumber(int $userId): string
+    {
+        return DB::transaction(function () use ($userId) {
+            $prefix = 'INV';
+            $date = now()->format('Ymd');
 
-        return sprintf('%s-%s-%04d', $prefix, $date, $sequence);
+            // Lock the table for this user's sales today to prevent race conditions
+            $lastSale = static::where('user_id', $userId)
+                ->whereDate('created_at', today())
+                ->lockForUpdate()
+                ->latest('id')
+                ->first();
+
+            $sequence = 1;
+            if ($lastSale && preg_match('/-(\d{4})$/', $lastSale->invoice_number, $matches)) {
+                $sequence = ((int) $matches[1]) + 1;
+            }
+
+            return sprintf('%s-%s-%04d', $prefix, $date, $sequence);
+        });
     }
 
     protected static function boot()
@@ -81,9 +104,19 @@ class Sale extends Model
         parent::boot();
 
         static::creating(function ($sale) {
-            if (empty($sale->invoice_number)) {
-                $sale->invoice_number = static::generateInvoiceNumber();
+            if (empty($sale->invoice_number) && $sale->user_id) {
+                $sale->invoice_number = static::generateInvoiceNumber($sale->user_id);
             }
         });
+    }
+
+    /**
+     * Retrieve the model for a bound value (scoped to authenticated user).
+     */
+    public function resolveRouteBinding($value, $field = null): ?self
+    {
+        return $this->where($field ?? $this->getRouteKeyName(), $value)
+            ->where('user_id', auth()->id())
+            ->firstOrFail();
     }
 }
