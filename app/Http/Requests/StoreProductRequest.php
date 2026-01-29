@@ -3,22 +3,38 @@
 namespace App\Http\Requests;
 
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rule;
 
 class StoreProductRequest extends FormRequest
 {
     public function authorize(): bool
     {
-        return true; // Authorization handled in controller
+        return true;
     }
 
     public function rules(): array
     {
+        $userId = $this->user()->id;
+
         return [
-            'sku' => ['required', 'string', 'max:100', 'unique:products,sku'],
+            'sku' => [
+                'required',
+                'string',
+                'max:100',
+                Rule::unique('products', 'sku')->where('user_id', $userId),
+            ],
             'name' => ['required', 'string', 'max:255'],
             'description' => ['nullable', 'string'],
-            'barcode' => ['nullable', 'string', 'max:100', 'unique:products,barcode'],
-            'category_id' => ['nullable', 'exists:categories,id'],
+            'barcode' => [
+                'nullable',
+                'string',
+                'max:100',
+                Rule::unique('products', 'barcode')->where('user_id', $userId),
+            ],
+            'category_id' => [
+                'nullable',
+                Rule::exists('categories', 'id')->where('user_id', $userId),
+            ],
             'cost_price' => ['nullable', 'numeric', 'min:0'],
             'regular_price' => ['required', 'numeric', 'min:0'],
             'sale_price' => ['nullable', 'numeric', 'min:0', 'lt:regular_price'],
@@ -37,6 +53,7 @@ class StoreProductRequest extends FormRequest
         return [
             'sku.unique' => 'A product with this SKU already exists.',
             'barcode.unique' => 'A product with this barcode already exists.',
+            'category_id.exists' => 'Selected category does not exist or does not belong to you.',
             'sale_price.lt' => 'Sale price must be less than regular price.',
             'regular_price.required' => 'Regular price is required.',
             'stock_quantity.required' => 'Stock quantity is required.',

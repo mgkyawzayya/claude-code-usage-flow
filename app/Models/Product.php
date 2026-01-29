@@ -99,4 +99,19 @@ class Product extends Model
         return $query->where('track_inventory', true)
             ->whereColumn('stock_quantity', '<=', 'reorder_point');
     }
+
+    public function scopeForUser($query, int $userId)
+    {
+        return $query->where('user_id', $userId);
+    }
+
+    /**
+     * Retrieve the model for a bound value (scoped to authenticated user).
+     */
+    public function resolveRouteBinding($value, $field = null): ?self
+    {
+        return $this->where($field ?? $this->getRouteKeyName(), $value)
+            ->where('user_id', auth()->id())
+            ->firstOrFail();
+    }
 }

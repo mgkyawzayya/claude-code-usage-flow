@@ -6,6 +6,7 @@ use App\Http\Requests\StoreProductRequest;
 use App\Http\Requests\UpdateProductRequest;
 use App\Models\Category;
 use App\Models\Product;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Inertia\Response;
@@ -15,9 +16,8 @@ class ProductController extends Controller
     public function index(Request $request): Response
     {
         $query = Product::with('category')
-            ->where('user_id', auth()->id());
+            ->forUser(auth()->id());
 
-        // Search
         if ($request->filled('search')) {
             $search = $request->search;
             $query->where(function ($q) use ($search) {
@@ -27,27 +27,19 @@ class ProductController extends Controller
             });
         }
 
-        // Filter by category
         if ($request->filled('category')) {
             $query->where('category_id', $request->category);
         }
 
-        // Filter by stock status
         if ($request->filled('stock_status')) {
-            switch ($request->stock_status) {
-                case 'low':
-                    $query->lowStock();
-                    break;
-                case 'out':
-                    $query->where('stock_quantity', 0);
-                    break;
-                case 'in-stock':
-                    $query->where('stock_quantity', '>', 0);
-                    break;
-            }
+            match ($request->stock_status) {
+                'low' => $query->lowStock(),
+                'out' => $query->where('stock_quantity', 0),
+                'in-stock' => $query->where('stock_quantity', '>', 0),
+                default => null,
+            };
         }
 
-        // Sort
         $sortField = $request->get('sort', 'name');
         $sortDirection = $request->get('direction', 'asc');
         $query->orderBy($sortField, $sortDirection);
@@ -78,7 +70,7 @@ class ProductController extends Controller
         ]);
     }
 
-    public function store(StoreProductRequest $request)
+    public function store(StoreProductRequest $request): RedirectResponse
     {
         $validated = $request->validated();
         $validated['user_id'] = auth()->id();
@@ -91,10 +83,7 @@ class ProductController extends Controller
 
     public function show(Product $product): Response
     {
-        if ($product->user_id !== auth()->id()) {
-            abort(403);
-        }
-
+        // Authorization handled by resolveRouteBinding in Product model
         $product->load('category');
 
         $stockMovements = $product->stockMovements()
@@ -111,10 +100,6 @@ class ProductController extends Controller
 
     public function edit(Product $product): Response
     {
-        if ($product->user_id !== auth()->id()) {
-            abort(403);
-        }
-
         $categories = Category::where('user_id', auth()->id())
             ->active()
             ->orderBy('name')
@@ -126,24 +111,16 @@ class ProductController extends Controller
         ]);
     }
 
-    public function update(UpdateProductRequest $request, Product $product)
+    public function update(UpdateProductRequest $request, Product $product): RedirectResponse
     {
-        if ($product->user_id !== auth()->id()) {
-            abort(403);
-        }
-
         $product->update($request->validated());
 
         return redirect()->route('pos.products.index')
             ->with('success', 'Product updated successfully.');
     }
 
-    public function destroy(Product $product)
+    public function destroy(Product $product): RedirectResponse
     {
-        if ($product->user_id !== auth()->id()) {
-            abort(403);
-        }
-
         $product->delete();
 
         return redirect()->route('pos.products.index')
